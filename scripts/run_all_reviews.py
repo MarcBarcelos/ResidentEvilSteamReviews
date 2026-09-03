@@ -24,10 +24,10 @@ Arguments:
     - `--purchase-type` — `all`, `steam`, or `non_steam` (default: `all`)
     - `--review-type` — `all`, `positive`, or `negative` (default: `all`)
     - `--filter-offtopic-activity` — `1` to exclude review bombs, `0` to include them (default: `0`)
+    - `--game-tag` — set from the CSV's `Tag` column if present (e.g. `re2r`), else the slugified game name; embedded in each review's `review_id`
 
-    A few example invocations:
+Uses:
 
-    ```bash
     # Bare minimum
     python run_all_reviews.py --csv resident_evil_steam_games.csv
 
@@ -41,13 +41,13 @@ Arguments:
     python run_all_reviews.py --csv games.csv --delay 0.1
     ```
 
-    You can also run `python run_all_reviews.py --help` to get this list directly from the script.
-
 IN THIS CASE:
-    python run_all_reviews.py \
-  --csv ../resident_evil_steam_games.csv \
+    python3 scripts/run_all_reviews.py \
+  --csv resident_evil_steam_games.csv \
+  --script scripts/steam_reviews.py \
   --language english \
-  --out-dir ../raw_reviews \
+  --out-dir raw_reviews \
+  --only-tags re2r,re3r \
   --skip-existing
 """
 
@@ -60,7 +60,7 @@ from pathlib import Path
 
 
 def slugify(name: str) -> str:
-    """Turn a game name into a safe filename."""
+    """Turn a game name into a filename."""
     # Replace anything that isn't alphanumeric with an underscore, collapse runs
     slug = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower()
     return slug or "game"
@@ -123,7 +123,17 @@ def main():
         action="store_true",
         help="Skip games whose output CSV already exists.",
     )
+    p.add_argument(
+        "--only-tags",
+        type=str,
+        default=None,
+        help="Comma-separated list of Tag values to run (e.g. 're2r,re3r'). Default: run every row.",
+    )
     args = p.parse_args()
+
+    only_tags = None
+    if args.only_tags:
+        only_tags = {t.strip() for t in args.only_tags.split(",") if t.strip()}
 
     csv_path = Path(args.csv)
     if not csv_path.is_file():
@@ -138,7 +148,7 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read all rows up front so we can show progress like "[3/17]"
+    # Read all rows up front so can show progress like "[3/17]"
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
@@ -174,7 +184,12 @@ def main():
             failures.append((name, "invalid app id"))
             continue
 
-        out_file = out_dir / f"{slugify(name)}_{app_id}.csv"
+        tag = (row.get("Tag") or "").strip() or slugify(name)
+
+        if only_tags is not None and tag not in only_tags:
+            continue
+
+        out_file = out_dir / f"{slugify(name)}.csv"
 
         if args.skip_existing and out_file.exists():
             print(f"[{i}/{total}] {name} -> already exists, skipping ({out_file})")
@@ -194,6 +209,7 @@ def main():
             "--purchase-type", args.purchase_type,
             "--review-type", args.review_type,
             "--filter-offtopic-activity", str(args.filter_offtopic_activity),
+            "--game-tag", tag,
         ]
 
         try:

@@ -19,11 +19,18 @@
 import sys
 import argparse
 import csv
+import hashlib
 import time
+from pathlib import Path
 import requests
 from datetime import datetime
 from urllib.parse import quote
 from tqdm import tqdm
+
+# Fixed so the same Steam author hashes to the same author_id across every
+# game's export, letting cross-game author analysis work without storing
+# the real steamid.
+AUTHOR_ID_SALT = "resident-evil-reviews-v1"
 
 
 if sys.version_info >= (3, 11):
@@ -41,6 +48,53 @@ def b(x) -> int:
     return 1 if bool(x) else 0
 
 
+def anonymize_author_id(steamid) -> str:
+    if not steamid:
+        return ""
+    digest = hashlib.sha256(f"{AUTHOR_ID_SALT}:{steamid}".encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+class AuthorNumberMap:
+    """Maps hashed author_id -> a short sequential 'author_000001'-style id,
+    persisted to a CSV so the same person gets the same number across every
+    game's export (and across resumed/interrupted runs)."""
+
+    FIELDNAMES = ["author_id", "author_number"]
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.by_author_id = {}
+        self.next_n = 1
+
+        if path.exists():
+            with open(path, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    n = int(row["author_number"].removeprefix("author_"))
+                    self.by_author_id[row["author_id"]] = row["author_number"]
+                    self.next_n = max(self.next_n, n + 1)
+
+        self._file = open(path, "a", newline="", encoding="utf-8")
+        self._writer = csv.DictWriter(self._file, fieldnames=self.FIELDNAMES)
+        if self._file.tell() == 0:
+            self._writer.writeheader()
+
+    def get(self, author_id: str) -> str:
+        if not author_id:
+            return ""
+        number = self.by_author_id.get(author_id)
+        if number is None:
+            number = f"author_{self.next_n:06d}"
+            self.next_n += 1
+            self.by_author_id[author_id] = number
+            self._writer.writerow({"author_id": author_id, "author_number": number})
+            self._file.flush()
+        return number
+
+    def close(self):
+        self._file.close()
+
+
 def fetch_reviews(
     app_id: int,
     out_csv: str,
@@ -50,7 +104,9 @@ def fetch_reviews(
     review_type: str = "all",
     filter_offtopic_activity: int = 0,
     start_cursor: str = "*",
+    game_tag: str = None,
 ):
+    tag = game_tag or str(app_id)
     base = f"https://store.steampowered.com/appreviews/{app_id}"
     url = (
         f"{base}?json=1&num_per_page=100&filter=recent&number=0"
@@ -59,7 +115,12 @@ def fetch_reviews(
         f"&cursor={quote(start_cursor, safe='')}"
     )
 
+    author_map = AuthorNumberMap(Path(out_csv).parent / "author_id_map.csv")
+
     fieldnames = [
+        "review_id",
+        "author_id",
+        "author_number",
         "review",
         "review_length",
         "sentiment",
@@ -80,6 +141,8 @@ def fetch_reviews(
     seen_ids = set()
     seen_cursors = set()
     pbar = None
+    empty_streak = 0
+    MAX_EMPTY_STREAK = 5
 
     with open(out_csv, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
@@ -114,8 +177,12 @@ def fetch_reviews(
 
                 a = rv.get("author") or {}
                 review_text = (rv.get("review") or "").strip()
+                author_id = anonymize_author_id(a.get("steamid"))
                 w.writerow(
                     {
+                        "review_id": f"{tag}_{rid}",
+                        "author_id": author_id,
+                        "author_number": author_map.get(author_id),
                         "review": review_text,
                         "review_length": len(review_text),
                         "sentiment": b(rv.get("voted_up")),
@@ -138,8 +205,22 @@ def fetch_reviews(
 
             cursor = data.get("cursor")
             num_reviews = (data.get("query_summary") or {}).get("num_reviews", 0)
-            if num_reviews == 0 or not cursor or cursor in seen_cursors:
+
+            if not cursor:
+                print(f"\nStopping: no cursor returned (checked={checked}, written={written})")
                 break
+
+            if cursor in seen_cursors and num_reviews > 0:
+                print(f"\nStopping: repeated cursor with non-empty page, likely an API anomaly (checked={checked}, written={written})")
+                break
+
+            if num_reviews == 0:
+                empty_streak += 1
+                if cursor in seen_cursors or empty_streak >= MAX_EMPTY_STREAK:
+                    print(f"\nStopping: {empty_streak} consecutive empty/repeated pages (checked={checked}, written={written})")
+                    break
+            else:
+                empty_streak = 0
 
             seen_cursors.add(cursor)
             url = (
@@ -149,10 +230,11 @@ def fetch_reviews(
                 f"&cursor={quote(cursor, safe='')}"
             )
 
-            time.sleep(delay)
+            time.sleep(delay if num_reviews else 2)
 
     if pbar is not None:
         pbar.close()
+    author_map.close()
 
     return written, checked
 
@@ -167,6 +249,7 @@ def main():
     p.add_argument("--review-type", type=str, default="all", help='Review type: "all", "positive", or "negative"')
     p.add_argument("--filter-offtopic-activity", type=int, default=0, help="1 to filter offtopic activity, else 0")
     p.add_argument("--cursor", type=str, default="*", help="Starting cursor token ('*' means begin)")
+    p.add_argument("--game-tag", type=str, default=None, help="Short tag embedded in review_id instead of the app id (e.g. 're2r'). Defaults to the app id.")
     args = p.parse_args()
 
     written, checked = fetch_reviews(
@@ -178,6 +261,7 @@ def main():
         review_type=args.review_type,
         filter_offtopic_activity=args.filter_offtopic_activity,
         start_cursor=args.cursor,
+        game_tag=args.game_tag,
     )
     print(f"Written ({args.language}): {written} | Checked (all): {checked}")
 
