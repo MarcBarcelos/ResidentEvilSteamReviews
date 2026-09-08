@@ -13,7 +13,7 @@ List of relevant characters:
 Resident evil 2:
 - Leon S. Kennedy (Protagonist)
 - Claire Redfield (Protagonist)
-- Shelly Birkin (Story relevant Character)
+- Sherry Birkin (Story relevant Character)
 - William Birkin (Story relevant Character / villain spoiler oops, also called "G" or "Stage 1-4 G" (each number exists)
 - Ada Wong (Story relevant Character)
 - Tyrant (also called Mr. X, same dude)
@@ -48,7 +48,7 @@ def remove_punctuation(text: string) -> string:
 
 def create_out_paths(game, root_out_path):
     """
-    create and out path for hits and misses, and make sure the directories exist
+    create an out path for hits and misses, and make sure the directories exist
     """
     hits_out_path = root_out_path.joinpath(f"{game}/hits/")
     hits_out_path.mkdir(exist_ok=True, parents=True)
@@ -71,7 +71,7 @@ def main():
     CHARACTERS = [
         "leon",
         "claire",
-        "shelly",
+        "sherry",
         "william",
         "ada",
         "tyrant",
