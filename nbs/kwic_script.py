@@ -17,6 +17,7 @@ Resident evil 2:
 - William Birkin (Story relevant Character / villain spoiler oops, also called "G" or "Stage 1-4 G" (each number exists)
 - Ada Wong (Story relevant Character)
 - Tyrant (also called Mr. X, same dude)
+- Annette Birkin (villain)
 
 Resident evil 3:
 - Jill Valentine (protagonist)
@@ -76,6 +77,7 @@ def main():
         "ada",
         "tyrant",
         "mr",
+        "annette",
         "jill",
         "carlos",
         "nemesis",
