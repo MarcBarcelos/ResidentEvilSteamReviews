@@ -1,3 +1,6 @@
 .REvenv
 author_id_map.csv
 .DS_Store
+.env
+results/*.npy
+results/*.csv
